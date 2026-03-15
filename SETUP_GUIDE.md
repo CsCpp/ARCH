@@ -76,10 +76,10 @@
 | PB5  | Segment E  | GPIO Output PP     | Resistor 220R -> Display   |
 | PB6  | Segment F  | GPIO Output PP     | Resistor 220R -> Display   |
 | PB7  | Segment G  | GPIO Output PP     | Resistor 220R -> Display   |
-| PA10 | Digit 1    | GPIO Output PP     | 2N7002 Gate (Anode/Cathode)|
-| PA11 | Digit 2    | GPIO Output PP     | 2N7002 Gate (Anode/Cathode)|
-| PA12 | Digit 3    | GPIO Output PP     | 2N7002 Gate (Anode/Cathode)|
-| PA15 | Digit 4    | GPIO Output PP     | 2N7002 (Set SWD in SYS!)   |
+| PA10 | Digit 1    | GPIO Output PP     | Resistor 1k ->   BC807     |
+| PA11 | Digit 2    | GPIO Output PP     | Resistor 1k ->   BC807     |
+| PA12 | Digit 3    | GPIO Output PP     | Resistor 1k ->   BC807     |
+| PA15 | Digit 4    | GPIO Output PP     | Resistor 1k ->   BC807     |
 
 ### 4. Периферия и датчики
 | Pin  | Function   | Mode               | Hardware Connection        |
