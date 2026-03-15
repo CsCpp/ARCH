@@ -53,21 +53,48 @@
 ---
 
 ## 4. GPIO (Назначение выводов)
+### 1. Силовая часть (PWM - TIM1)
+| Pin  | Function   | Mode               | Hardware Connection        |
+|:-----|:-----------|:-------------------|:---------------------------|
+| PA8  | TIM1_CH1   | AF Push-Pull       | 74HCT541 (A0) -> High Side A|
+| PA7  | TIM1_CH1N  | AF Push-Pull       | 74HCT541 (A1) -> Low Side A |
+| PA9  | TIM1_CH2   | AF Push-Pull       | 74HCT541 (A2) -> High Side B|
+| PB0  | TIM1_CH2N  | AF Push-Pull       | 74HCT541 (A3) -> Low Side B |
 
-| Пин | Функция | Режим | Примечание |
-| :--- | :--- | :--- | :--- |
-| **PA10** | Digit 1 (Анод) | Output Push-Pull | Дисплей |
-| **PA11** | Digit 2 (Анод) | Output Push-Pull | Дисплей |
-| **PA12** | Digit 3 (Анод) | Output Push-Pull | Дисплей |
-| **PA15** | Digit 4 (Анод) | Output Push-Pull | **Проверьте Debug: Serial Wire в SYS!** |
-| **PB0-PB6** | Segments A-G | Output Push-Pull | Катоды дисплея через резисторы 220 Ом |
-| **PB8** | Gas Valve | Output Push-Pull | Реле/транзистор клапана газа |
-| **PB9** | Oscillator | Output Push-Pull | Реле включения поджига |
-| **PA0** | Torch Button | **Input Pull-up** | Кнопка на горелке (замыкание на GND) |
-| **PA1** | Encoder A | **Input Pull-up** | Фаза А энкодера |
-| **PA2** | Encoder B | **Input Pull-up** | Фаза B энкодера |
-| **PA3** | Encoder SW | **Input Pull-up** | Кнопка выбора энкодера |
+### 2. Защита и буфер
+| Pin  | Function   | Mode               | Hardware Connection        |
+|:-----|:-----------|:-------------------|:---------------------------|
+| PB12 | Buffer OE  | GPIO Output PP     | 74HCT541 (Pins 1 & 19)     |
 
+### 3. Дисплей (7-Seg Dynamic)
+| Pin  | Function   | Mode               | Hardware Connection        |
+|:-----|:-----------|:-------------------|:---------------------------|
+| PB1  | Segment A  | GPIO Output PP     | Resistor 220R -> Display   |
+| PB2  | Segment B  | GPIO Output PP     | Resistor 220R -> Display   |
+| PB3  | Segment C  | GPIO Output PP     | Resistor 220R -> Display   |
+| PB4  | Segment D  | GPIO Output PP     | Resistor 220R -> Display   |
+| PB5  | Segment E  | GPIO Output PP     | Resistor 220R -> Display   |
+| PB6  | Segment F  | GPIO Output PP     | Resistor 220R -> Display   |
+| PB7  | Segment G  | GPIO Output PP     | Resistor 220R -> Display   |
+| PA10 | Digit 1    | GPIO Output PP     | 2N7002 Gate (Anode/Cathode)|
+| PA11 | Digit 2    | GPIO Output PP     | 2N7002 Gate (Anode/Cathode)|
+| PA12 | Digit 3    | GPIO Output PP     | 2N7002 Gate (Anode/Cathode)|
+| PA15 | Digit 4    | GPIO Output PP     | 2N7002 (Set SWD in SYS!)   |
+
+### 4. Периферия и датчики
+| Pin  | Function   | Mode               | Hardware Connection        |
+|:-----|:-----------|:-------------------|:---------------------------|
+| PA4  | Current Sn | ADC1_IN4           | Current Sensor (Hall/Shunt)|
+| PB8  | Gas Valve  | GPIO Output PP     | Relay / Gas Valve Driver   |
+| PB9  | Oscillator | GPIO Output PP     | HV Ignition (Oscillator)   |
+| PA0  | Torch Btn  | Input Pull-up      | Torch Button (to GND)      |
+
+### 5. Энкодер (Настройка)
+| Pin  | Function   | Mode               | Hardware Connection        |
+|:-----|:-----------|:-------------------|:---------------------------|
+| PA1  | Encoder A  | Input Pull-up      | Encoder Phase A            |
+| PA2  | Encoder B  | Input Pull-up      | Encoder Phase B            |
+| PA3  | Encoder SW | Input Pull-up      | Encoder Button             |
 ---
 
 ## 5. Project Manager (Генерация кода)
