@@ -1,104 +1,69 @@
-# Инструкция по настройке среды STM32CubeIDE для проекта ARCH
-
-Этот документ описывает шаги конфигурирования микроконтроллера **STM32F103C8T6** в графическом редакторе `.ioc` для обеспечения совместимости с предоставленным кодом.
-
-## 1. System Core (Системные настройки)
-
-### RCC (Тактирование)
-* **High Speed Clock (HSE):** Crystal/Ceramic Resonator.
-* **Clock Configuration:** Установите **HCLK на 72 MHz**. Нажмите Enter, чтобы IDE рассчитала множители (PLL Source = HSE, PLLMul = x9).
-
-### SYS (Отладка)
-* **Debug:** **Serial Wire** (Критически важно! Это освобождает пин PA15 для дисплея и позволяет прошивать плату по двум проводам).
+# 📑 PROJECT ARCH: FINAL PINOUT SPECIFICATION (v4.4)
+**Device:** TIG Welding Controller  
+**MCU:** STM32F103C8T6 (Blue Pill)
 
 ---
 
-## 2. Timers (Таймеры)
+## 🔴 1. POWER STAGE & PROTECTION
+*Управление инвертором и аппаратная защита.*
 
-### TIM1 (Силовой ШИМ)
-*Этот таймер управляет H-мостом. Настройка Dead-time критична для выживания модулей Mitsubishi.*
-* **Slave Mode:** Disable.
-* **Clock Source:** Internal Clock.
-* **Channel 1 & 2:** **PWM Generation CH1 CH2**.
-* **Parameter Settings:**
-    * **Prescaler:** 0
-    * **Counter Period (ARR):** 4500 (частота 16 кГц).
-    * **PWM Mode:** Mode 1.
-    * **CH Polarity:** High.
-    * **Dead Time (DTG):** **150** (дает ~2.1 мкс паузы). *Для таких тяжелых модулей как CM600, 1 мкс может быть недостаточно.*
-
-### TIM2 (Таймер AC частоты)
-* **Clock Source:** Internal Clock.
-* **Prescaler:** 71 (1 тик = 1 мкс).
-* **Counter Period:** 10000 (автоматически меняется кодом).
-* **NVIC Settings:** Включить **TIM2 global interrupt**.
-
-### TIM3 (Динамическая индикация)
-* **Clock Source:** Internal Clock.
-* **Prescaler:** 71.
-* **Counter Period:** 2000 (обновление разряда каждые 2 мс).
-* **NVIC Settings:** Включить **TIM3 global interrupt**.
+| Pin | Function | Mode | Description |
+| :--- | :--- | :--- | :--- |
+| **PA8** | **TIM1_CH1** | AF PP | High Side A (Верхнее плечо A) |
+| **PA7** | **TIM1_CH1N**| AF PP | Low Side A (Нижнее плечо A) |
+| **PA9** | **TIM1_CH2** | AF PP | High Side B (Верхнее плечо B) |
+| **PB0** | **TIM1_CH2N**| AF PP | Low Side B (Нижнее плечо B) |
+| **PB11** | **BUFFER OE** | Out PP | **1=Stop, 0=Run**. Блокировка 74HCT541 |
+| **PB1** | **DRV_FAULT** | Input | **Ошибка драйверов**. Мгновенный стоп ШИМ |
+| **PB2** | **RESERVE** | - | Свободен (BOOT1 pin) |
 
 ---
 
-## 3. Analog (АЦП)
+## 🔵 2. USER INTERFACE (7-SEG DISPLAY)
+*Динамическая индикация (Общий Анод). Линейный порядок сегментов.*
 
-### ADC1 (Датчик тока ABB ES1000)
-* **IN4:** Поставьте галочку (пин **PA4**).
-* **Parameter Settings:**
-    * **Data Alignment:** Right alignment.
-    * **Continuous Conversion Mode:** Disabled (запуск программно в цикле ПИ-регулятора).
-    * **Sampling Time:** **71.5 Cycles** (минимум, для фильтрации шумов силовой части).
+### 2.1 Cathodes (Segment Bus - LINEAR)
+| Pin | Segment | Mask Bit | Logic | Hardware |
+| :--- | :--- | :--- | :--- | :--- |
+| **PB3** | **Seg A** | bit 0 | 0 = ON | Res 220R (JTAG OFF Required) |
+| **PB4** | **Seg B** | bit 1 | 0 = ON | Res 220R (JTAG OFF Required) |
+| **PB5** | **Seg C** | bit 2 | 0 = ON | Res 220R |
+| **PB6** | **Seg D** | bit 3 | 0 = ON | Res 220R |
+| **PB7** | **Seg E** | bit 4 | 0 = ON | Res 220R |
+| **PB8** | **Seg F** | bit 5 | 0 = ON | Res 220R |
+| **PB9** | **Seg G** | bit 6 | 0 = ON | Res 220R |
+
+### 2.2 Anodes (Digit Select)
+| Pin | Digit | Logic | Hardware |
+| :--- | :--- | :--- | :--- |
+| **PB12** | **Digit 1** | 1 = ON | Res 330R -> PC817 -> Anode 1 |
+| **PB13** | **Digit 2** | 1 = ON | Res 330R -> PC817 -> Anode 2 |
+| **PB14** | **Digit 3** | 1 = ON | Res 330R -> PC817 -> Anode 3 |
+| **PB15** | **Digit 4** | 1 = ON | Res 330R -> PC817 -> Anode 4 |
 
 ---
 
-## 4. GPIO (Назначение выводов)
-### 1. Силовая часть (PWM - TIM1)
-| Pin  | Function   | Mode               | Hardware Connection        |
-|:-----|:-----------|:-------------------|:---------------------------|
-| PA8  | TIM1_CH1   | AF Push-Pull       | 74HCT541 (A0) -> High Side A|
-| PA7  | TIM1_CH1N  | AF Push-Pull       | 74HCT541 (A1) -> Low Side A |
-| PA9  | TIM1_CH2   | AF Push-Pull       | 74HCT541 (A2) -> High Side B|
-| PB0  | TIM1_CH2N  | AF Push-Pull       | 74HCT541 (A3) -> Low Side B |
+## 🟡 3. PERIPHERALS & SENSORS
+| Pin | Function | Mode | Description |
+| :--- | :--- | :--- | :--- |
+| **PA4** | **CURR_SN** | ADC_IN4 | Датчик тока (ABB ES1000, 0–3.3V) |
+| **PA5** | **GAS_VLV** | Out PP | Реле газового клапана |
+| **PA6** | **OSC_HV** | Out PP | Реле осциллятора (HF Start) |
 
-### 2. Защита и буфер
-| Pin  | Function   | Mode               | Hardware Connection        |
-|:-----|:-----------|:-------------------|:---------------------------|
-| PB12 | Buffer OE  | GPIO Output PP     | 74HCT541 (Pins 1 & 19)     |
-
-### 3. Дисплей (7-Seg Dynamic)
-| Pin  | Function   | Mode               | Hardware Connection        |
-|:-----|:-----------|:-------------------|:---------------------------|
-| PB1  | Segment A  | GPIO Output PP     | Resistor 220R -> Display   |
-| PB2  | Segment B  | GPIO Output PP     | Resistor 220R -> Display   |
-| PB3  | Segment C  | GPIO Output PP     | Resistor 220R -> Display   |
-| PB4  | Segment D  | GPIO Output PP     | Resistor 220R -> Display   |
-| PB5  | Segment E  | GPIO Output PP     | Resistor 220R -> Display   |
-| PB6  | Segment F  | GPIO Output PP     | Resistor 220R -> Display   |
-| PB7  | Segment G  | GPIO Output PP     | Resistor 220R -> Display   |
-| PA10 | Digit 1    | GPIO Output PP     | Resistor 1k ->   BC807     |
-| PA11 | Digit 2    | GPIO Output PP     | Resistor 1k ->   BC807     |
-| PA12 | Digit 3    | GPIO Output PP     | Resistor 1k ->   BC807     |
-| PA15 | Digit 4    | GPIO Output PP     | Resistor 1k ->   BC807     |
-
-### 4. Периферия и датчики
-| Pin  | Function   | Mode               | Hardware Connection        |
-|:-----|:-----------|:-------------------|:---------------------------|
-| PA4  | Current Sn | ADC1_IN4           | Current Sensor (Hall/Shunt)|
-| PB8  | Gas Valve  | GPIO Output PP     | Relay / Gas Valve Driver   |
-| PB9  | Oscillator | GPIO Output PP     | HV Ignition (Oscillator)   |
-| PA0  | Torch Btn  | Input Pull-up      | Torch Button (to GND)      |
-
-### 5. Энкодер (Настройка)
-| Pin  | Function   | Mode               | Hardware Connection        |
-|:-----|:-----------|:-------------------|:---------------------------|
-| PA1  | Encoder A  | Input Pull-up      | Encoder Phase A            |
-| PA2  | Encoder B  | Input Pull-up      | Encoder Phase B            |
-| PA3  | Encoder SW | Input Pull-up      | Encoder Button             |
 ---
 
-## 5. Project Manager (Генерация кода)
+## 🟢 4. CONTROL INPUTS (ENCODER & BUTTON)
+| Pin | Function | Mode | Description |
+| :--- | :--- | :--- | :--- |
+| **PA0** | **TRCH_BTN**| Input PU | Кнопка горелки (2T/4T) |
+| **PA1** | **ENC_A** | Input PU | Энкодер: Фаза А |
+| **PA2** | **ENC_B** | Input PU | Энкодер: Фаза B |
+| **PA3** | **ENC_SW** | Input PU | Кнопка энкодера (Menu) |
 
-1. Перейдите во вкладку **Code Generator**.
-2. Установите галочку: **Generate peripheral initialization as a pair of '.c/.h' files per peripheral**.
-3. Нажмите `Ctrl + S` для генерации кода.
+---
+
+## ⚙️ SOFTWARE IMPLEMENTATION NOTES
+1. **Remap:** Вызвать `__HAL_AFIO_REMAP_SWJ_NOJTAG()` для работы **PB3/PB4**.
+2. **Safety:** Пин **PB11** при старте установить в `HIGH`.
+3. **Fault Handling:** Рекомендуется настроить **PB1** как EXTI-прерывание для защиты.
+4. **Fast Display:** `GPIOB->ODR = (GPIOB->ODR & ~(0x7F << 3)) | (segment_map[value] << 3);`
