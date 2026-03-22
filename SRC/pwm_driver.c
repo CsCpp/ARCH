@@ -1,79 +1,98 @@
 #include "config.h"
 
 void PWM_Init(void) {
-    // Включаем тактирование портов и таймера
+    /* 1. Инициализация тактирования периферии */
     RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_IOPBEN | RCC_APB2ENR_AFIOEN | RCC_APB2ENR_TIM1EN;
 
-    // Ремап и освобождение пинов JTAG для дисплея
+    /* Освобождение пинов JTAG (для дисплея) и переназначение выходов TIM1 (Partial Remap). */
     AFIO->MAPR |= AFIO_MAPR_SWJ_CFG_JTAGDISABLE | AFIO_MAPR_TIM1_REMAP_PARTIALREMAP;
 
-    // Настройка GPIOA: PA8,9 (Верхние AF_PP), PA7 (Нижний 1N AF_PP), PA0-3 (Входы), PA4 (Аналог), PA5-6 (Выходы)
-    GPIOA->CRH = (GPIOA->CRH & ~0x000000FF) | 0x000000BB;
+    /* 2. Настройка GPIO для силового управления */
+    GPIOA->CRH = (GPIOA->CRH & ~0x000000FF) | 0x000000BB; // ШИМ пины
     GPIOA->CRL = 0x92208888;
-    GPIOA->ODR |= 0x0F; // Подтяжка кнопок PA0-PA3
+    GPIOA->ODR |= 0x0F;
 
-    // Настройка GPIOB: PB0 (Нижний 2N AF_PP), PB1 (Вход защиты)
-    // Остальные пины PB3-PB15 настраиваются в display_driver, здесь только фиксируем PB0/PB1
     GPIOB->CRL = (GPIOB->CRL & ~0x000000FF) | 0x0000008B;
+    GPIOB->CRH = (GPIOB->CRH & ~0x0000F000) | 0x00003000; // PB11 (Блокировка моста)
 
-    // PB11 (Buffer OE) - Настройка как выход
-    GPIOB->CRH = (GPIOB->CRH & ~0x0000F000) | 0x00003000;
+    BRIDGE_STOP(); // Принудительно глушим мост до полного запуска таймера
 
-    BRIDGE_STOP(); // Закрываем буфер (PB11 = 1)
-
-    // Настройка TIM1 (16 кГц)
+    /* 3. Настройка таймера TIM1 (Генерация 16 кГц) */
     TIM1->PSC = 0;
-    TIM1->ARR = 4500;
+    TIM1->ARR = PWM_MAX; // 4500 тактов при 72 МГц
+
+    /* Режим Center-Aligned не используется, классический PWM Mode 1. Включена предзагрузка регистра CCR. */
     TIM1->CCMR1 = 0x6060 | TIM_CCMR1_OC1PE | TIM_CCMR1_OC2PE;
+    TIM1->CCER = 0x0055; // Включение каналов 1, 1N, 2, 2N (комплементарные пары)
 
-    // Включаем все 4 выхода: CC1E (PA8), CC1NE (PA7), CC2E (PA9), CC2NE (PB0)
-    TIM1->CCER = 0x0055;
+    /* Генератор мертвого времени (BDTR).
+       Значение DEAD_TIME (160) предотвращает сквозные токи через транзисторы верхнего и нижнего плеча. */
+    TIM1->BDTR = TIM_BDTR_OSSR | TIM_BDTR_OSSI | DEAD_TIME;
 
-    // Deadtime и безопасные состояния при стопе
-    TIM1->BDTR = TIM_BDTR_OSSR | TIM_BDTR_OSSI | 160;
-
-    TIM1->EGR |= TIM_EGR_UG; // Принудительное обновление регистров
+    /* Синхронизация теневых регистров и включение прерываний ШИМ */
+    TIM1->EGR |= TIM_EGR_UG;
     TIM1->DIER |= TIM_DIER_UIE;
+
+    /* Высший приоритет (0) гарантирует жесткий real-time для ШИМ-контроллера */
     NVIC_SetPriority(TIM1_UP_IRQn, 0);
     NVIC_EnableIRQ(TIM1_UP_IRQn);
     TIM1->CR1 |= TIM_CR1_CEN;
 }
 
-void PWM_SetUpdate(bool active) {
-    // 1. Аппаратная защита по входу PB1
+/* Функция поканального управления мостом (вызывается из прерывания TIM1_UP) */
+void PWM_SetUpdate(bool active)
+{
+    /* АППАРАТНАЯ ЗАЩИТА: Чтение сигнала Fault от силовых драйверов (например, по перегрузке).
+       В случае ошибки сварка рубится моментально, состояние FSM сбрасывается. */
     if (GPIOB->IDR & (1 << 1)) {
         active = false;
         machine_state = IDLE;
     }
 
-    // 2. Если сварка НЕ активна (Пауза в пульсе или Конец SPOT)
     if (!active) {
-        TIM1->BDTR &= ~TIM_BDTR_MOE; // Гасим ключи
-        BRIDGE_STOP();               // Закрываем буфер (PB11=1)
-        TIM1->CCR1 = 0;              // Скважность в ноль
+        /* Безопасное аппаратное выключение. Сброс бита MOE (Main Output Enable)
+           закрывает все выходы ШИМ за наносекунды. */
+        TIM1->BDTR &= ~TIM_BDTR_MOE;
+        BRIDGE_STOP();
+        TIM1->CCR1 = 0;
         TIM1->CCR2 = 0;
         return;
     }
 
-    // 3. Активная фаза сварки
-    uint16_t duty = (set_amp * 4500) / 250;
+    /* Пропорциональный расчет скважности ШИМ (Duty Cycle) на основе целевого тока.
+       Формула: (Текущий_ток * Разрешение_ШИМ) / Максимальный_ток */
+    uint16_t duty = (uint16_t)((current_setpoint * PWM_MAX) / 2500);
 
-    TIM1->BDTR |= TIM_BDTR_MOE; // Разрешаем работу моста
-    BRIDGE_RUN();               // Открываем буфер (PB11=0)
+    /* Ограничение скважности до PWM_MAX_DUTY (93%). Защищает трансформатор от насыщения,
+       а транзисторы - от невозможности корректно переключиться. */
+    if (duty > PWM_MAX_DUTY) duty = PWM_MAX_DUTY;
 
-    // Логика AC/DC
+    TIM1->BDTR |= TIM_BDTR_MOE;
+    BRIDGE_RUN();
+
+    /* ГЕНЕРАЦИЯ AC / DC */
     if (modes[cur_mode].is_ac) {
         static uint16_t ac_cnt = 0;
         static uint8_t ac_side = 0;
-        if (++ac_cnt >= 160) { ac_cnt = 0; ac_side = !ac_side; }
 
+        /* Расчет количества циклов ШИМ на один полупериод переменного тока.
+           (16000 Гц ШИМ / 2) / Частота AC = циклов на полупериод. */
+        uint16_t ac_threshold = 8000 / modes[cur_mode].ac_freq;
+
+        if (++ac_cnt >= ac_threshold) {
+            ac_cnt = 0;
+            ac_side = !ac_side; // Перекидываем полярность
+        }
+
+        /* Коммутация "диагоналей" Н-моста. В AC TIG одно плечо работает в режиме ШИМ,
+           а другое статично открыто для формирования полярности. */
         if (ac_side == 0) {
             TIM1->CCR1 = duty; TIM1->CCR2 = 0;
         } else {
             TIM1->CCR1 = 0;    TIM1->CCR2 = duty;
         }
     } else {
-        // Обычный DC режим (используем только первое плечо моста)
+        /* DC TIG (Постоянный ток): Работает всегда только прямая полярность. */
         TIM1->CCR1 = duty;
         TIM1->CCR2 = 0;
     }
