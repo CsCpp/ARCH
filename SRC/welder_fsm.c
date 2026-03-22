@@ -1,104 +1,137 @@
 #include "config.h"
 
+/* Текущее целевое значение тока, генерируемое автоматом (учитывает нарастание и спад). */
+volatile uint32_t current_setpoint = 0;
+
+/* Фиксация значения тока в момент отпускания кнопки (от этой точки рассчитывается спад). */
+volatile uint32_t amp_at_release = 0;
+
+/* Основной конечный автомат сварочного процесса (вызывается каждую 1 мс из прерывания TIM3) */
 void Welder_Process(void) {
-    // PA0 - Кнопка горелки (Активный низкий уровень, поэтому инвертируем)
-    bool btn = !(GPIOA->IDR & (1 << 0));
+    bool btn = BTN_TORCH_PRESSED(); // Чтение триггера горелки
+
+    /* Приведение токов к рабочему масштабу (умножение на 10 для сглаживания математики ШИМ) */
+    uint32_t target_amp_x10 = (uint32_t)set_amp * 10;
+    uint32_t start_amp_x10 = (uint32_t)modes[cur_mode].start_amp * 10;
 
     switch (machine_state) {
+
+        /* 1. РЕЖИМ ПРОСТОЯ */
         case IDLE:
-            // Ждем нажатия кнопки
+            current_setpoint = 0; // Тока нет, силовые ключи заперты
             if (btn) {
-                GPIOA->BSRR = (1 << 5); // Включаем ГАЗ (PA5)
+                GAS_ON(); // Открываем клапан подачи аргона
                 state_timer = ms_ticks;
                 machine_state = PRE_GAS;
             }
             break;
 
+        /* 2. ПРЕД-ГАЗ (Вытеснение кислорода из зоны шва перед поджигом) */
         case PRE_GAS:
-            // Ждем время предгаза
             if (ms_ticks - state_timer >= modes[cur_mode].pre_gas) {
-                GPIOA->BSRR = (1 << 6); // Включаем ОСЦИЛЛЯТОР (PA6)
+                current_setpoint = start_amp_x10; // Установка стартового тока для безопасного пробоя
+                OSC_ON(); // Запуск высоковольтного осциллятора
                 state_timer = ms_ticks;
                 machine_state = START_HF;
             }
-            // Если кнопку бросили во время предгаза — уходим на продувку
+            /* Если сварщик передумал и бросил кнопку — отмена пробоя, уходим на продувку */
             if (!btn) machine_state = POST_GAS;
             break;
 
+        /* 3. ПОДЖИГ ДУГИ (Работа осциллятора ограничена по времени для защиты электроники) */
         case START_HF:
-            // Время работы осциллятора (из твоей прошивки — 500мс)
-            if (ms_ticks - state_timer >= 500) {
-                GPIOA->BRR = (1 << 6);  // Выключаем ОСЦИЛЛЯТОР
+            if (ms_ticks - state_timer >= 500) { // Осциллятор работает максимум 500 мс
+                OSC_OFF();
                 state_timer = ms_ticks;
-                machine_state = WELD_WORK;
+                machine_state = WELD_WORK; // Переход к основному току
             }
-            // Если дуга не зажглась и кнопку бросили
             if (!btn) machine_state = POST_GAS;
             break;
 
-        case WELD_WORK:
-            // Если кнопку отпустили (и это не SPOT), идем в POST_GAS
+        /* 4. ОСНОВНАЯ СВАРКА (Нарастание тока и поддержание дуги) */
+        case WELD_WORK: {
+            uint32_t up_time = modes[cur_mode].up_slope;
+            uint32_t elapsed = ms_ticks - state_timer;
+
+            /* Алгоритм линейной интерполяции для мягкого старта (Up-Slope) */
+            if (up_time > 10 && elapsed < up_time) {
+                current_setpoint = start_amp_x10 +
+                    ((target_amp_x10 - start_amp_x10) * elapsed) / up_time;
+            } else {
+                current_setpoint = target_amp_x10; // Выход на номинальный ток
+            }
+
+            /* Если кнопку отпустили (в не-Spot режиме) — начинаем заваривать кратер */
             if (!btn && cur_mode != 3) {
+                amp_at_release = current_setpoint; // Фиксируем ток, на котором прервали сварку
                 state_timer = ms_ticks;
-                machine_state = POST_GAS;
+                machine_state = DOWN_SLOPE;
                 break;
             }
 
-            // Логика импульсных режимов (SS, COLD, SPOT)
+            /* Обработка импульсного режима (чередование Work / Pause) */
             if (modes[cur_mode].is_pulse) {
                 if (ms_ticks - state_timer >= modes[cur_mode].p_work) {
                     state_timer = ms_ticks;
-
-                    if (cur_mode == 3) {
-                        // РЕЖИМ SPOT: Отработали 1.2с и принудительно гасим дугу
-                        machine_state = POST_GAS;
-                    } else {
-                        // РЕЖИМЫ SS / COLD: Переходим в фазу паузы
-                        machine_state = WELD_PAUSE;
-                    }
+                    machine_state = (cur_mode == 3) ? DOWN_SLOPE : WELD_PAUSE;
                 }
-            } else {
-                // Обычная сварка (DC FE или AC AL): варим пока нажата кнопка
-                if (!btn) machine_state = POST_GAS;
             }
-            break;
+        } break;
 
+        /* 5. БАЗОВЫЙ ТОК (Пауза в импульсном режиме для кристаллизации ванны) */
         case WELD_PAUSE:
-            // Если кнопку отпустили в паузе — прекращаем сварку
+            current_setpoint = target_amp_x10 / 5; // Базовый ток фиксированно = 20% от основного (можно вынести в меню)
+
             if (!btn) {
+                amp_at_release = current_setpoint;
                 state_timer = ms_ticks;
-                machine_state = POST_GAS;
+                machine_state = DOWN_SLOPE;
                 break;
             }
-
-            // Ждем окончания паузы (например, 600мс для COLD)
             if (ms_ticks - state_timer >= modes[cur_mode].p_pause) {
                 state_timer = ms_ticks;
-                machine_state = WELD_WORK; // Снова даем импульс тока
+                machine_state = WELD_WORK;
             }
             break;
 
-        case POST_GAS:
-            GPIOA->BRR = (1 << 6); // На всякий случай гасим осциллятор
+        /* 6. ЗАВАРКА КРАТЕРА (Плавное гашение дуги для предотвращения трещин в конце шва) */
+        case DOWN_SLOPE:
+            OSC_OFF(); // На всякий случай дублируем отключение осциллятора
+            {
+                uint32_t down_time = modes[cur_mode].down_slope;
+                uint32_t elapsed = ms_ticks - state_timer;
 
-            // Ждем время постгаза
+                if (down_time > 10 && elapsed < down_time) {
+                    if (amp_at_release > 50) { // Ток отрыва дуги ~ 5 Ампер (50 единиц)
+                        current_setpoint = amp_at_release -
+                            ((amp_at_release - 50) * elapsed) / down_time;
+                    }
+                } else {
+                    current_setpoint = 0; // Ток иссяк — глушим ШИМ аппаратно
+                    state_timer = ms_ticks;
+                    machine_state = POST_GAS;
+                }
+            }
+            break;
+
+        /* 7. ПОСТ-ГАЗ (Охлаждение вольфрамового электрода и защита кристаллизующегося шва от кислорода) */
+        case POST_GAS:
+            current_setpoint = 0;
+            OSC_OFF();
+
             if (ms_ticks - state_timer >= modes[cur_mode].post_gas) {
-                // Выходим в IDLE только если кнопка ОТПУЩЕНА (защита от перезапуска)
-                if (!btn) {
-                    GPIOA->BRR = (1 << 5); // Выключаем ГАЗ
+                if (!btn) { // Если кнопка всё еще не нажата — перекрываем газ
+                    GAS_OFF();
                     machine_state = IDLE;
                 }
             }
 
-            // Быстрый рестарт: если нажали кнопку во время продувки (кроме SPOT)
-            if (btn && cur_mode != 3) {
+            /* Быстрый рестарт дуги, если сварщик нажал кнопку до окончания продувки */
+            if (btn) {
+                GAS_ON();
                 state_timer = ms_ticks;
                 machine_state = PRE_GAS;
             }
-            break;
-
-        default:
-            machine_state = IDLE;
             break;
     }
 }
